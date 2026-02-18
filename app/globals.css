@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+:root {
+  --background: #070b16;
+  --foreground: #ecf0ff;
+}
+
+body {
+  background: radial-gradient(circle at top, #17244d, #050814 65%);
+  color: var(--foreground);
+  min-height: 100vh;
+}
+
+.voice-wave {
+  background: linear-gradient(120deg, rgba(63, 125, 255, 0.1), rgba(95, 221, 255, 0.12));
+  animation: wave 1.6s ease-in-out infinite;
+}
+
+@keyframes wave {
+  0%,
+  100% { transform: scaleY(0.45); }
+  50% { transform: scaleY(1); }
+}
