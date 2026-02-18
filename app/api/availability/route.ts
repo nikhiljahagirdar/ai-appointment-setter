@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { hasSupabase, supabase } from "@/lib/supabase";
-
+//
 type TenantPlan = {
   plan_code: string;
   ai_enabled: boolean;
