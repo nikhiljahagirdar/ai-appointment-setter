@@ -1,6 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { plans, type PlanId } from "@/lib/plans";
 
@@ -10,6 +11,11 @@ type AvailabilityResponse = {
   message?: string;
   error?: string;
   details?: string;
+  plan?: {
+    plan_code: string;
+    ai_enabled: boolean;
+    voice_enabled: boolean;
+  };
 };
 
 const animations = {
@@ -32,8 +38,7 @@ function VoiceHelper({
 
     const SpeechRecognition =
       typeof window !== "undefined"
-        ? ((window as any).webkitSpeechRecognition as any) ||
-          ((window as any).SpeechRecognition as any)
+        ? ((window as any).webkitSpeechRecognition as any) || ((window as any).SpeechRecognition as any)
         : null;
 
     if (!SpeechRecognition) {
@@ -74,7 +79,7 @@ function VoiceHelper({
         disabled={!enabled || listening}
         className="pulse-glow rounded-full bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
       >
-        {enabled ? (listening ? "Listening..." : "Start Voice") : "Voice disabled on this plan"}
+        {enabled ? (listening ? "Listening..." : "Start Voice") : "Voice disabled on this tenant plan"}
       </button>
       <p className="mt-3 text-sm text-slate-300">{status}</p>
     </div>
@@ -83,21 +88,32 @@ function VoiceHelper({
 
 export default function AppointmentSetter() {
   const [selectedPlan, setSelectedPlan] = useState<PlanId>("voice-pro");
+  const [tenantSlug, setTenantSlug] = useState("demo-clinic");
   const [date, setDate] = useState("");
   const [transcript, setTranscript] = useState("");
   const [slots, setSlots] = useState<string[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [apiMessage, setApiMessage] = useState<string>("");
+  const [tenantPlanCapabilities, setTenantPlanCapabilities] = useState<{
+    ai_enabled: boolean;
+    voice_enabled: boolean;
+    plan_code: string;
+  } | null>(null);
 
-  const currentPlan = useMemo(
-    () => plans.find((plan) => plan.id === selectedPlan) ?? plans[0],
-    [selectedPlan]
-  );
+  const currentPlan = useMemo(() => plans.find((plan) => plan.id === selectedPlan) ?? plans[0], [selectedPlan]);
+
+  const planVoiceEnabled = tenantPlanCapabilities?.voice_enabled ?? currentPlan.voiceEnabled;
+  const planAiEnabled = tenantPlanCapabilities?.ai_enabled ?? currentPlan.aiEnabled;
 
   async function searchAvailability() {
     if (!date) {
       setApiMessage("Choose a date to continue.");
+      return;
+    }
+
+    if (!tenantSlug) {
+      setApiMessage("Tenant slug is required.");
       return;
     }
 
@@ -108,6 +124,7 @@ export default function AppointmentSetter() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        tenantSlug,
         date,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
       })
@@ -118,13 +135,37 @@ export default function AppointmentSetter() {
     if (!res.ok) {
       setApiMessage(data.error ?? "Could not load slots.");
       setSlots([]);
+      setTenantPlanCapabilities(null);
       setLoading(false);
       return;
     }
 
     setSlots(data.slots ?? []);
+    setTenantPlanCapabilities(data.plan ?? null);
     setApiMessage(data.message ?? "Found available appointment slots.");
     setLoading(false);
+  }
+
+  async function goToStripeCheckout() {
+    const res = await fetch("/api/stripe/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tenantSlug,
+        planLookupKey: currentPlan.stripePriceLookupKey
+      })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      setApiMessage(data.error ?? "Unable to start checkout.");
+      return;
+    }
+
+    if (data.url) {
+      window.location.href = data.url;
+    }
   }
 
   function confirmBooking() {
@@ -133,9 +174,9 @@ export default function AppointmentSetter() {
       return;
     }
 
-    const modeLabel = currentPlan.aiEnabled ? "AI voice assistant" : "standard flow";
+    const modeLabel = planAiEnabled ? "AI voice assistant" : "standard flow";
     setApiMessage(
-      `Booked ${date} at ${selectedSlot} via ${modeLabel}. We'll send confirmation instantly.`
+      `Booked ${date} at ${selectedSlot} for ${tenantSlug} via ${modeLabel}. We'll send confirmation instantly.`
     );
   }
 
@@ -149,11 +190,16 @@ export default function AppointmentSetter() {
         className="glass rounded-3xl p-8"
       >
         <p className="text-sm uppercase tracking-[0.3em] text-cyan-300">Supabase + Next.js 16 + Tailwind 4</p>
-        <h1 className="mt-3 text-4xl font-bold">AI Voice Appointment Setter</h1>
+        <h1 className="mt-3 text-4xl font-bold">Multi-tenant AI Voice Appointment Setter</h1>
         <p className="mt-3 max-w-3xl text-slate-300">
-          Search Supabase for open slots, let customers speak booking requests, and enforce plan rules
-          that disable AI for non-AI plans.
+          Search tenant-specific availability in Supabase, let customers speak booking requests, and enforce
+          tenant plan rules that disable AI features on lower tiers.
         </p>
+        <div className="mt-4 flex gap-3">
+          <Link href="/admin" className="rounded-lg bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-900">
+            Open Admin Panel
+          </Link>
+        </div>
       </motion.header>
 
       <section className="grid gap-5 md:grid-cols-3">
@@ -190,6 +236,13 @@ export default function AppointmentSetter() {
           <h3 className="text-xl font-semibold">Book by voice or manual input</h3>
           <div className="mt-4 flex flex-wrap gap-3">
             <input
+              type="text"
+              value={tenantSlug}
+              onChange={(event) => setTenantSlug(event.target.value)}
+              placeholder="tenant slug (e.g. demo-clinic)"
+              className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2"
+            />
+            <input
               type="date"
               value={date}
               onChange={(event) => setDate(event.target.value)}
@@ -201,6 +254,12 @@ export default function AppointmentSetter() {
               className="rounded-lg bg-indigo-400 px-4 py-2 font-semibold text-slate-900 disabled:opacity-50"
             >
               {loading ? "Searching..." : "Search availability"}
+            </button>
+            <button
+              onClick={goToStripeCheckout}
+              className="rounded-lg bg-fuchsia-400 px-4 py-2 font-semibold text-slate-900"
+            >
+              Pay plan with Stripe
             </button>
           </div>
 
@@ -227,9 +286,7 @@ export default function AppointmentSetter() {
                       key={slot}
                       onClick={() => setSelectedSlot(slot)}
                       className={`rounded-md px-3 py-2 text-sm ${
-                        selectedSlot === slot
-                          ? "bg-cyan-300 text-slate-900"
-                          : "bg-slate-800 text-slate-100"
+                        selectedSlot === slot ? "bg-cyan-300 text-slate-900" : "bg-slate-800 text-slate-100"
                       }`}
                     >
                       {slot}
@@ -259,15 +316,14 @@ export default function AppointmentSetter() {
           transition={{ duration: 0.4, delay: 0.3 }}
           className="space-y-4"
         >
-          <VoiceHelper enabled={currentPlan.voiceEnabled} onTranscript={setTranscript} />
+          <VoiceHelper enabled={planVoiceEnabled} onTranscript={setTranscript} />
           <div className="glass rounded-2xl p-5 text-sm text-slate-300">
-            <p className="text-xs uppercase tracking-[0.2em] text-cyan-300">Plan Guardrails</p>
+            <p className="text-xs uppercase tracking-[0.2em] text-cyan-300">Tenant Plan Guardrails</p>
             <ul className="mt-3 list-disc space-y-2 pl-4">
-              <li>Selected plan: {currentPlan.name}</li>
-              <li>AI voice booking: {currentPlan.aiEnabled ? "On" : "Off"}</li>
-              <li>
-                If AI is off, customers can still search availability and submit manual confirmation.
-              </li>
+              <li>Tenant: {tenantSlug || "-"}</li>
+              <li>Effective plan: {tenantPlanCapabilities?.plan_code ?? currentPlan.id}</li>
+              <li>AI voice booking: {planAiEnabled ? "On" : "Off"}</li>
+              <li>Voice input: {planVoiceEnabled ? "On" : "Off"}</li>
             </ul>
           </div>
         </motion.aside>

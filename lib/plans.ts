@@ -7,6 +7,7 @@ export type Plan = {
   description: string;
   aiEnabled: boolean;
   voiceEnabled: boolean;
+  stripePriceLookupKey: string;
 };
 
 export const plans: Plan[] = [
@@ -16,7 +17,8 @@ export const plans: Plan[] = [
     price: "$29/mo",
     description: "Manual booking flow with calendar and SMS follow-ups.",
     aiEnabled: false,
-    voiceEnabled: false
+    voiceEnabled: false,
+    stripePriceLookupKey: "starter-monthly"
   },
   {
     id: "voice-pro",
@@ -24,7 +26,8 @@ export const plans: Plan[] = [
     price: "$99/mo",
     description: "Voice intake + availability lookup + assisted booking.",
     aiEnabled: false,
-    voiceEnabled: true
+    voiceEnabled: true,
+    stripePriceLookupKey: "voice-pro-monthly"
   },
   {
     id: "ai-agent",
@@ -32,6 +35,7 @@ export const plans: Plan[] = [
     price: "$249/mo",
     description: "Full AI voice agent that can confirm slots and close bookings.",
     aiEnabled: true,
-    voiceEnabled: true
+    voiceEnabled: true,
+    stripePriceLookupKey: "ai-agent-monthly"
   }
 ];
