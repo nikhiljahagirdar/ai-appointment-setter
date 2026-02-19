@@ -8,54 +8,32 @@ export type Plan = {
   aiEnabled: boolean;
   voiceEnabled: boolean;
   stripePriceLookupKey: string;
+  features: string[];
 };
 
-export const plans: Plan[] = [
-  {
+export const plans: Record<PlanId, Plan> = {
+  starter: {
     id: "starter",
     name: "Starter",
     price: "$29/mo",
     description: "Manual booking flow with calendar and SMS follow-ups.",
     aiEnabled: false,
     voiceEnabled: false,
-    stripePriceLookupKey: "starter-monthly"
-  },
-  {
-    id: "voice-pro",
-    name: "Voice Pro",
-    price: "$99/mo",
-    description: "Voice intake + availability lookup + assisted booking.",
-    aiEnabled: false,
-    voiceEnabled: true,
-    stripePriceLookupKey: "voice-pro-monthly"
-  },
-  {
-    id: "ai-agent",
-    name: "AI Agent",
-    price: "$249/mo",
-    description: "Full AI voice agent that can confirm slots and close bookings.",
-    aiEnabled: true,
-    voiceEnabled: true,
-    stripePriceLookupKey: "ai-agent-monthly"
-  }
-];
-export type PlanTier = "starter" | "pro";
-
-export const plans = {
-  starter: {
-    name: "Starter",
-    price: "$29/mo",
-    aiVoiceEnabled: false,
+    stripePriceLookupKey: "starter-monthly",
     features: [
       "Manual appointment booking",
       "Realtime availability lookup",
       "Basic booking dashboard",
     ],
   },
-  pro: {
-    name: "Pro Voice AI",
-    price: "$129/mo",
-    aiVoiceEnabled: true,
+  "voice-pro": {
+    id: "voice-pro",
+    name: "Voice Pro",
+    price: "$99/mo",
+    description: "Voice intake + availability lookup + assisted booking.",
+    aiEnabled: false,
+    voiceEnabled: true,
+    stripePriceLookupKey: "voice-pro-monthly",
     features: [
       "Everything in Starter",
       "AI voice assistant",
@@ -63,4 +41,21 @@ export const plans = {
       "Auto follow-up reminders",
     ],
   },
-} as const;
+  "ai-agent": {
+    id: "ai-agent",
+    name: "AI Agent",
+    price: "$249/mo",
+    description: "Full AI voice agent that can confirm slots and close bookings.",
+    aiEnabled: true,
+    voiceEnabled: true,
+    stripePriceLookupKey: "ai-agent-monthly",
+    features: [
+      "Everything in Voice Pro",
+      "Full AI closure",
+      "Sentiment analysis",
+      "Custom voice selection",
+    ],
+  },
+};
+
+export type PlanTier = PlanId;

@@ -1,73 +1,64 @@
-import Stripe from "stripe";
 import { NextRequest, NextResponse } from "next/server";
-import { hasSupabaseAdmin, supabaseAdmin } from "@/lib/supabase";
+import Stripe from "stripe";
+import { supabaseAdmin } from "@/lib/supabase";
 
-const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
-const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2025-01-27ts",
+});
 
-const stripe = stripeSecretKey
-  ? new Stripe(stripeSecretKey, {
-      apiVersion: "2025-01-27.acacia"
-    })
-  : null;
+export async function POST(request: NextRequest) {
+  try {
+    const { planId, tenantId, successUrl, cancelUrl } = await request.json();
 
-export async function POST(req: NextRequest) {
-  const { tenantSlug, planLookupKey } = await req.json();
-
-  if (!tenantSlug || !planLookupKey) {
-    return NextResponse.json(
-      { error: "tenantSlug and planLookupKey are required." },
-      { status: 400 }
-    );
-  }
-
-  if (!stripe) {
-    return NextResponse.json(
-      {
-        error:
-          "Stripe is not configured. Set STRIPE_SECRET_KEY and NEXT_PUBLIC_APP_URL to enable checkout."
-      },
-      { status: 500 }
-    );
-  }
-
-  let customerEmail = "tenant@example.com";
-  let metadata: Record<string, string> = { tenantSlug, planLookupKey };
-
-  if (hasSupabaseAdmin && supabaseAdmin) {
-    const { data, error } = await supabaseAdmin
+    // 1. Get Tenant Details
+    const { data: tenant } = await supabaseAdmin
       .from("tenants")
-      .select("admin_email")
-      .eq("slug", tenantSlug)
+      .select("name, admin_email, stripe_customer_id")
+      .eq("id", tenantId)
       .single();
 
-    if (!error && data?.admin_email) {
-      customerEmail = data.admin_email;
+    if (!tenant) throw new Error("Tenant not found");
+
+    let customerId = tenant.stripe_customer_id;
+
+    // 2. Create Stripe Customer if not exists
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email: tenant.admin_email,
+        name: tenant.name,
+        metadata: { tenantId },
+      });
+      customerId = customer.id;
+      
+      await supabaseAdmin
+        .from("tenants")
+        .update({ stripe_customer_id: customerId })
+        .eq("id", tenantId);
     }
+
+    // 3. Get Plan Price ID
+    const { data: plan } = await supabaseAdmin
+      .from("platform_plans")
+      .select("stripe_price_id")
+      .eq("code", planId)
+      .single();
+
+    if (!plan?.stripe_price_id) throw new Error("Plan price not configured in Stripe");
+
+    // 4. Create Session
+    const session = await stripe.checkout.sessions.create({
+      customer: customerId,
+      line_items: [{ price: plan.stripe_price_id, quantity: 1 }],
+      mode: "subscription",
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      subscription_data: {
+        metadata: { tenantId },
+      },
+    });
+
+    return NextResponse.json({ url: session.url });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
-
-  const prices = await stripe.prices.list({
-    lookup_keys: [planLookupKey],
-    active: true,
-    expand: ["data.product"],
-    limit: 1
-  });
-
-  if (!prices.data.length) {
-    return NextResponse.json(
-      { error: `No Stripe price found for lookup key: ${planLookupKey}` },
-      { status: 404 }
-    );
-  }
-
-  const session = await stripe.checkout.sessions.create({
-    mode: "subscription",
-    customer_email: customerEmail,
-    success_url: `${appUrl}/?checkout=success`,
-    cancel_url: `${appUrl}/?checkout=cancel`,
-    line_items: [{ price: prices.data[0].id, quantity: 1 }],
-    metadata
-  });
-
-  return NextResponse.json({ url: session.url });
 }

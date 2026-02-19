@@ -1,28 +1,86 @@
 "use client";
 
-import { AnimatePresence, motion } from "motion/react";
-import { useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useMemo, useState } from "react";
 import { plans, type PlanTier } from "@/lib/plans";
+import { supabase } from "@/lib/supabase";
+import Link from "next/link";
+import { User } from "@supabase/supabase-js";
+
+import { Button } from "@/components/radix/Button";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/radix/Card";
+import { Input } from "@/components/radix/Input";
+import { Badge } from "@/components/radix/Badge";
+import { Separator } from "@/components/radix/Separator";
+import { Alert, AlertDescription, AlertTitle } from "@/components/radix/Alert";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/radix/Avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/radix/DropdownMenu";
+import { ScrollArea } from "@/components/radix/ScrollArea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/radix/Tabs";
+import { VoiceBookingAssistant } from "@/components/radix/VoiceBookingAssistant";
+import { CalendarIcon, Mic, CheckCircle2, AlertCircle, LogOut, User as UserIcon, Sparkles, CreditCard, Layout, Lock, ArrowRight } from "lucide-react";
+import { toast } from "@/components/radix/use-toast";
 
 type AppointmentSlot = {
   id: string;
-  starts_at: string;
-  provider_name: string;
-  is_available: boolean;
+  date: string;
+  time: string;
+  is_booked: boolean;
 };
 
+function TemplateRenderer({ html, fallback }: { html?: string; fallback: React.ReactNode }) {
+  if (!html) return <>{fallback}</>;
+  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 export function AppointmentSetter() {
-  const [plan, setPlan] = useState<PlanTier>("pro");
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<any>(null);
+  const [plan, setPlan] = useState<PlanTier>("voice-pro");
   const [date, setDate] = useState("");
   const [loading, setLoading] = useState(false);
   const [slots, setSlots] = useState<AppointmentSlot[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<AppointmentSlot | null>(null);
-  const [voiceStatus, setVoiceStatus] = useState("Idle");
+  const [tenantData, setTenantData] = useState<any>(null);
 
   const planDetails = useMemo(() => plans[plan], [plan]);
 
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      setUser(data.user);
+      if (data.user) {
+        supabase.from("profiles").select("*").eq("id", data.user.id).single().then(({ data: prof }) => {
+          setProfile(prof);
+        });
+      }
+    });
+
+    supabase.from("tenants").select("*").eq("slug", "demo-clinic").single().then(({ data }) => {
+      setTenantData(data);
+    });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
   async function searchAvailability() {
+    if (!user) {
+       toast({ title: "Login Required", description: "You must be signed in to view availability.", variant: "destructive" });
+       return;
+    }
     setLoading(true);
     setError(null);
     setSelectedSlot(null);
@@ -47,164 +105,244 @@ export function AppointmentSetter() {
     }
   }
 
-  async function handleVoiceBook(slot: AppointmentSlot) {
-    if (!planDetails.aiVoiceEnabled) return;
+  async function handleUIBook(slot: AppointmentSlot) {
+    if (!user) return;
 
-    setVoiceStatus("Listening for your confirmation...");
+    setLoading(true);
+    try {
+      const { error } = await supabase.from("appointments").insert({
+        tenant_id: tenantData?.id,
+        slot_id: slot.id,
+        customer_id: user.id,
+        customer_name: profile?.full_name || user.email,
+        booking_type: 'ui',
+        status: 'confirmed'
+      });
 
-    const response = await fetch("/api/voice-booking", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        plan,
-        slotId: slot.id,
-        transcript: "Book this appointment for me please.",
-      }),
-    });
+      if (error) throw error;
 
-    const data = (await response.json()) as { confirmation?: string; error?: string };
-
-    if (!response.ok) {
-      setVoiceStatus(data.error ?? "Voice booking failed.");
-      return;
+      await supabase.from("appointment_slots").update({ is_booked: true }).eq("id", slot.id);
+      
+      setSelectedSlot(slot);
+      setSlots(prev => prev.filter(s => s.id !== slot.id));
+      toast({ title: "Success", description: "Appointment booked successfully!" });
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setLoading(false);
     }
-
-    setSelectedSlot(slot);
-    setVoiceStatus(data.confirmation ?? "Appointment booked successfully.");
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-6 py-10">
-      <motion.header
-        initial={{ opacity: 0, y: 24 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur"
-      >
-        <p className="mb-2 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-300">Next.js 16 + Supabase + Tailwind 4</p>
-        <h1 className="text-3xl font-semibold md:text-4xl">AI Voice Appointment Setter</h1>
-        <p className="mt-3 max-w-3xl text-sm text-slate-200/90 md:text-base">
-          Search your Supabase appointment database for availability, announce open slots to the user,
-          and (if your plan includes AI voice) allow spoken booking confirmations.
-        </p>
-      </motion.header>
-
-      <section className="grid gap-6 md:grid-cols-2">
-        {Object.entries(plans).map(([key, item], index) => (
-          <motion.button
-            key={key}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: index * 0.12 }}
-            onClick={() => setPlan(key as PlanTier)}
-            className={`rounded-2xl border p-6 text-left transition ${
-              plan === key
-                ? "border-cyan-300 bg-cyan-300/10 shadow-[0_0_35px_rgba(45,212,191,0.2)]"
-                : "border-white/10 bg-white/5 hover:border-white/20"
-            }`}
-          >
-            <div className="flex items-start justify-between">
-              <div>
-                <h2 className="text-xl font-semibold">{item.name}</h2>
-                <p className="text-sm text-slate-300">{item.price}</p>
-              </div>
-              <span className="rounded-full border border-white/15 px-3 py-1 text-xs">
-                {item.aiVoiceEnabled ? "AI Voice On" : "AI Voice Off"}
-              </span>
+    <main className="mx-auto flex min-h-screen max-w-7xl flex-col gap-10 px-6 py-12">
+      {/* Dynamic Header Section */}
+      <TemplateRenderer 
+        html={tenantData?.logo_url ? `<img src="${tenantData.logo_url}" class="h-12 mb-4" />` : undefined}
+        fallback={
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-cyan-400 font-bold uppercase tracking-widest text-[10px]">
+              <Sparkles className="h-4 w-4" />
+              <span>{tenantData?.name || "Next-Gen SaaS Platform"} Dashboard</span>
             </div>
-            <ul className="mt-4 space-y-2 text-sm text-slate-200">
-              {item.features.map((feature) => (
-                <li key={feature}>• {feature}</li>
-              ))}
-            </ul>
-          </motion.button>
+            <h1 className="text-4xl md:text-5xl font-black tracking-tight text-white">
+              Appointment <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-indigo-500">Concierge</span>
+            </h1>
+            <p className="text-slate-400 max-w-2xl">
+              Access AI-driven scheduling and classic booking interfaces in one place.
+            </p>
+          </div>
+        }
+      />
+
+      {/* Plan Selection */}
+      <section className="grid gap-6 md:grid-cols-3">
+        {(Object.entries(plans) as [PlanTier, typeof plans["starter"]][]).map(([key, item]) => (
+          <Card key={key} className={`border-white/10 bg-slate-900/40 backdrop-blur-sm transition-all ${plan === key ? "ring-2 ring-cyan-500/50 border-cyan-500/50" : "opacity-70 hover:opacity-100"}`}>
+            <CardHeader>
+              <CardTitle className="text-white text-xl">{item.name}</CardTitle>
+              <CardDescription className="text-cyan-400 font-bold">{item.price}</CardDescription>
+            </CardHeader>
+            <CardFooter>
+              <Button onClick={() => setPlan(key)} variant={plan === key ? "default" : "outline"} className="w-full font-bold">
+                {plan === key ? "Selected Plan" : "Switch to " + item.name}
+              </Button>
+            </CardFooter>
+          </Card>
         ))}
       </section>
 
-      <motion.section
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.2 }}
-        className="grid gap-8 rounded-3xl border border-white/10 bg-black/20 p-8 md:grid-cols-[1fr_1.2fr]"
-      >
-        <div className="space-y-4">
-          <h3 className="text-2xl font-semibold">1) Search availability</h3>
-          <p className="text-sm text-slate-300">
-            Enter a preferred date and we will query Supabase for open appointment slots.
-          </p>
-          <input
-            type="date"
-            value={date}
-            onChange={(event) => setDate(event.target.value)}
-            className="w-full rounded-xl border border-white/10 bg-slate-900 px-4 py-3 text-sm outline-none ring-cyan-300 transition focus:ring"
-          />
-          <button
-            type="button"
-            disabled={loading || !date}
-            onClick={searchAvailability}
-            className="w-full rounded-xl bg-cyan-400 px-4 py-3 font-semibold text-slate-900 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-slate-500"
+      <section className="grid gap-8 lg:grid-cols-5">
+        {/* Availability & AI Control */}
+        <div className="lg:col-span-2 space-y-6">
+          <Card className="border-white/10 bg-slate-900/60 backdrop-blur-xl overflow-hidden">
+            <div className="h-1 bg-gradient-to-r from-cyan-500 to-transparent" />
+            <CardHeader>
+              <CardTitle className="text-white flex items-center gap-2">
+                <CalendarIcon className="h-5 w-5 text-cyan-400" />
+                Availability Check
+              </CardTitle>
+              <CardDescription>Verify openings across the tenant schedule.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!user ? (
+                <div className="flex flex-col items-center justify-center py-6 text-center space-y-4 bg-black/20 rounded-xl border border-dashed border-white/10">
+                  <div className="h-12 w-12 rounded-full bg-slate-800 flex items-center justify-center">
+                    <Lock className="h-6 w-6 text-slate-500" />
+                  </div>
+                  <div className="space-y-1 px-4">
+                    <p className="text-sm font-bold text-white">Login Required</p>
+                    <p className="text-xs text-slate-500">Sign in to search availability and book appointments.</p>
+                  </div>
+                  <Button size="sm" className="bg-white text-slate-950 font-bold" asChild>
+                    <Link href="/login">Login / Register <ArrowRight className="ml-2 h-3 w-3" /></Link>
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="bg-slate-950 border-white/10 h-12" />
+                  <Button onClick={searchAvailability} disabled={loading || !date} className="w-full bg-cyan-500 text-slate-950 font-black h-12 transition-all active:scale-95">
+                    {loading ? <Loader2 className="animate-spin" /> : "Search Availability"}
+                  </Button>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Voice Assistant - Only if logged in and plan allows */}
+          {user && planDetails.voiceEnabled ? (
+            <VoiceBookingAssistant 
+              tenantId={tenantData?.id} 
+              userEmail={user.email} 
+              userName={profile?.full_name} 
+              voiceId={tenantData?.settings?.voice_id}
+            />
+          ) : user && !planDetails.voiceEnabled ? (
+            <Alert className="bg-indigo-500/5 border-indigo-500/20 text-indigo-400">
+               <Mic className="h-4 w-4" />
+               <AlertTitle className="text-xs font-bold uppercase tracking-widest">Upgrade Required</AlertTitle>
+               <AlertDescription className="text-xs">Upgrade to a Voice Pro plan to enable AI Voice Concierge.</AlertDescription>
+            </Alert>
+          ) : null}
+        </div>
+
+        {/* Booking Interface */}
+        <div className="lg:col-span-3">
+          <Tabs defaultValue="classic">
+            <TabsList className="bg-slate-950/50 border border-white/10 w-full justify-start h-auto p-1 gap-2">
+              <TabsTrigger value="classic" className="data-[state=active]:bg-cyan-500 data-[state=active]:text-slate-950 font-bold py-2.5 px-6 rounded-md">
+                Classic Booking
+              </TabsTrigger>
+              <TabsTrigger value="custom" className="data-[state=active]:bg-cyan-500 data-[state=active]:text-slate-950 font-bold py-2.5 px-6 rounded-md">
+                Custom Interface
+              </TabsTrigger>
+            </TabsList>
+            
+            <TabsContent value="classic" className="mt-6 outline-none">
+              {!user ? (
+                <Card className="border-dashed border-white/10 bg-transparent py-20">
+                  <CardContent className="flex flex-col items-center justify-center text-center space-y-4">
+                     <Layout className="h-12 w-12 text-slate-700 mb-2" />
+                     <p className="text-slate-400 font-medium italic">Login to view and book with our classic interface</p>
+                     <Button variant="outline" className="border-white/10 text-white" asChild>
+                       <Link href="/login">Get Access Now</Link>
+                     </Button>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card className="border-white/10 bg-slate-900/40 backdrop-blur-sm">
+                  <CardHeader>
+                    <CardTitle className="text-white text-xl">Standard Appointments</CardTitle>
+                    <CardDescription>Select a slot to confirm your booking instantly.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <ScrollArea className="h-[400px] pr-4">
+                      <div className="grid gap-3">
+                        {slots.map((slot) => (
+                          <div key={slot.id} className="group flex items-center justify-between p-5 rounded-2xl border border-white/5 bg-white/5 hover:bg-white/10 hover:border-cyan-500/20 transition-all">
+                            <div className="flex items-center gap-4">
+                               <div className="h-12 w-12 rounded-full bg-cyan-500/5 flex items-center justify-center text-cyan-400">
+                                  <Clock className="h-5 w-5" />
+                               </div>
+                               <div>
+                                  <p className="font-black text-white text-lg">{slot.time}</p>
+                                  <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">{slot.date}</p>
+                               </div>
+                            </div>
+                            <Button 
+                              onClick={() => handleUIBook(slot)} 
+                              className="bg-cyan-500 text-slate-950 font-bold px-6 rounded-xl hover:bg-cyan-400"
+                            >
+                              Book Now
+                            </Button>
+                          </div>
+                        ))}
+                        {slots.length === 0 && !loading && (
+                          <div className="py-20 text-center opacity-30">
+                            <CalendarIcon className="h-10 w-10 mx-auto mb-4" />
+                            <p className="italic">Choose a date to browse available slots</p>
+                          </div>
+                        )}
+                      </div>
+                    </ScrollArea>
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+
+            <TabsContent value="custom" className="mt-6">
+              <Card className="border-white/10 bg-slate-900/40">
+                <CardHeader>
+                  <CardTitle className="text-white text-xl flex items-center gap-2">
+                    <Layout className="h-5 w-5 text-indigo-400" />
+                    Custom Tenant UI
+                  </CardTitle>
+                  <CardDescription>Rendering tenant-specific HTML templates.</CardDescription>
+                </CardHeader>
+                <CardContent className="min-h-[300px] flex items-center justify-center">
+                  <TemplateRenderer 
+                    html={tenantData?.booking_template} 
+                    fallback={
+                      <div className="text-center opacity-40">
+                        <p className="text-sm italic">This tenant hasn't added a custom HTML template yet.</p>
+                      </div>
+                    } 
+                  />
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </div>
+      </section>
+
+      {/* Persistence confirmation overlay */}
+      <AnimatePresence>
+        {selectedSlot && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 w-full max-w-md px-6"
           >
-            {loading ? "Searching..." : "Find appointments"}
-          </button>
-
-          <AnimatePresence>
-            {error ? (
-              <motion.p
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                className="rounded-lg border border-rose-400/40 bg-rose-500/10 p-3 text-sm text-rose-200"
-              >
-                {error}
-              </motion.p>
-            ) : null}
-          </AnimatePresence>
-        </div>
-
-        <div className="space-y-3">
-          <h3 className="text-2xl font-semibold">2) Voice-assisted booking</h3>
-          <p className="text-sm text-slate-300">
-            We speak available times, then listen for spoken confirmation to book a slot.
-          </p>
-          <div className="grid gap-3">
-            {slots.map((slot, index) => (
-              <motion.div
-                key={slot.id}
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.08 }}
-                className="rounded-xl border border-white/10 bg-white/5 p-4"
-              >
-                <p className="font-medium">{new Date(slot.starts_at).toLocaleString()}</p>
-                <p className="text-xs text-slate-300">Provider: {slot.provider_name}</p>
-                <button
-                  type="button"
-                  disabled={!planDetails.aiVoiceEnabled}
-                  onClick={() => handleVoiceBook(slot)}
-                  className="mt-3 rounded-lg bg-indigo-400 px-3 py-2 text-sm font-semibold text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-500"
-                >
-                  {planDetails.aiVoiceEnabled ? "Speak & book this slot" : "Upgrade for AI voice booking"}
-                </button>
-              </motion.div>
-            ))}
-          </div>
-
-          <div className="rounded-xl border border-cyan-300/30 bg-cyan-400/10 p-4">
-            <p className="text-xs uppercase tracking-widest text-cyan-200">Voice assistant</p>
-            <div className="mt-2 flex items-end gap-1">
-              {[...Array(6)].map((_, i) => (
-                <span key={i} className="voice-wave inline-block h-7 w-1.5 rounded-sm" style={{ animationDelay: `${i * 120}ms` }} />
-              ))}
-            </div>
-            <p className="mt-3 text-sm text-cyan-100">{voiceStatus}</p>
-            {selectedSlot ? (
-              <p className="mt-1 text-xs text-cyan-200">
-                Booked: {new Date(selectedSlot.starts_at).toLocaleString()} with {selectedSlot.provider_name}
-              </p>
-            ) : null}
-          </div>
-        </div>
-      </motion.section>
+             <div className="bg-emerald-500 text-slate-950 p-6 rounded-3xl shadow-2xl flex items-center gap-4">
+                <div className="h-12 w-12 rounded-full bg-white/20 flex items-center justify-center">
+                   <CheckCircle2 className="h-6 w-6" />
+                </div>
+                <div>
+                   <p className="font-black uppercase tracking-tighter text-sm">Appointment Confirmed!</p>
+                   <p className="text-xs opacity-90 font-medium">Successfully booked for {selectedSlot.date} at {selectedSlot.time}</p>
+                </div>
+                <Button size="sm" variant="ghost" className="ml-auto hover:bg-white/10" onClick={() => setSelectedSlot(null)}>Close</Button>
+             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </main>
+  );
+}
+
+function Loader2({ className }: { className?: string }) {
+  return (
+    <svg className={cn("animate-spin", className)} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+    </svg>
   );
 }

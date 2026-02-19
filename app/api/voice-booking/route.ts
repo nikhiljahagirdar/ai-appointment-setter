@@ -2,11 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { plans, type PlanTier } from "@/lib/plans";
 import { supabase } from "@/lib/supabase";
 
-type AvailabilityRow = {
+type SlotRow = {
   id: string;
-  starts_at: string;
-  provider_name: string;
-  is_available: boolean;
+  date: string;
+  time: string;
+  is_booked: boolean;
 };
 
 export async function GET(request: NextRequest) {
@@ -18,23 +18,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Missing date query parameter." }, { status: 400 });
   }
 
-  const startOfDay = `${date}T00:00:00.000Z`;
-  const endOfDay = `${date}T23:59:59.999Z`;
-
   const { data, error } = await supabase
     .from("appointment_slots")
-    .select("id, starts_at, provider_name, is_available")
-    .eq("is_available", true)
-    .gte("starts_at", startOfDay)
-    .lte("starts_at", endOfDay)
-    .order("starts_at", { ascending: true })
-    .limit(plans[plan].aiVoiceEnabled ? 10 : 5);
+    .select("id, date, time, is_booked")
+    .eq("date", date)
+    .eq("is_booked", false)
+    .order("time", { ascending: true })
+    .limit(plans[plan].voiceEnabled ? 10 : 5);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ slots: (data ?? []) as AvailabilityRow[] });
+  return NextResponse.json({ slots: (data ?? []) as SlotRow[] });
 }
 
 export async function POST(request: NextRequest) {
@@ -42,14 +38,16 @@ export async function POST(request: NextRequest) {
     plan?: PlanTier;
     slotId?: string;
     transcript?: string;
+    customerName?: string;
+    customerPhone?: string;
   };
 
   const plan = body.plan ?? "starter";
 
-  if (!plans[plan].aiVoiceEnabled) {
+  if (!plans[plan].voiceEnabled) {
     return NextResponse.json(
       {
-        error: "Your current plan does not include AI voice booking. Upgrade to Pro Voice AI.",
+        error: "Your current plan does not include AI voice booking. Upgrade to Voice Pro or AI Agent.",
       },
       { status: 403 }
     );
@@ -61,25 +59,45 @@ export async function POST(request: NextRequest) {
 
   const { data: slot, error: slotError } = await supabase
     .from("appointment_slots")
-    .select("id, starts_at, provider_name, is_available")
+    .select("id, date, time, is_booked, tenant_id")
     .eq("id", body.slotId)
     .single();
 
-  if (slotError || !slot?.is_available) {
+  if (slotError || !slot || slot.is_booked) {
     return NextResponse.json({ error: "That slot is no longer available." }, { status: 409 });
   }
 
+  // Transaction-like update: set slot as booked
   const { error: updateError } = await supabase
     .from("appointment_slots")
-    .update({ is_available: false })
+    .update({ is_booked: true })
     .eq("id", body.slotId)
-    .eq("is_available", true);
+    .eq("is_booked", false);
 
   if (updateError) {
     return NextResponse.json({ error: updateError.message }, { status: 500 });
   }
 
+  // Create the appointment record
+  const { data: appointment, error: appointmentError } = await supabase
+    .from("appointments")
+    .insert({
+      tenant_id: slot.tenant_id,
+      slot_id: slot.id,
+      customer_name: body.customerName ?? "Voice Customer",
+      customer_phone: body.customerPhone ?? "Voice Call",
+      status: "confirmed",
+      voice_transcript: body.transcript,
+    })
+    .select()
+    .single();
+
+  if (appointmentError) {
+    return NextResponse.json({ error: appointmentError.message }, { status: 500 });
+  }
+
   return NextResponse.json({
-    confirmation: `Confirmed by voice: Your appointment for ${new Date(slot.starts_at).toLocaleString()} with ${slot.provider_name} is booked.`,
+    confirmation: `Confirmed by voice: Your appointment for ${slot.date} at ${slot.time} is booked.`,
+    appointment,
   });
 }
